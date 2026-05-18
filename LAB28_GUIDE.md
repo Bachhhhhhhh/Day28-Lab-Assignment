@@ -187,17 +187,21 @@ docker compose ps   # kiểm tra tất cả services đang Up
 
 Tạo notebook mới trên Kaggle, bật **GPU T4 x2**, chọn 1 trong 2 option:
 
-**Option A: Dùng ngrok**
+**Option A: Single GPU (đơn giản - dùng 1 GPU)**
 
 ```python
 # Cell 1 — Cài dependencies
 !pip install -q vllm fastapi uvicorn pyngrok mlflow sentence-transformers
 
+# Nếu cài vLLM bị lỗi, dùng fallback:
+# !pip install transformers==4.46.3 --quiet
+# !pip install vllm==0.7.3 --quiet
+
 # Cell 2 — Setup ngrok token (lấy tại ngrok.com/your-authtoken)
 from pyngrok import ngrok
 ngrok.set_auth_token("YOUR_NGROK_TOKEN")  # thay token của bạn
 
-# Cell 3 — Khởi động vLLM server
+# Cell 3 — Khởi động vLLM server (single GPU)
 import subprocess, threading, time
 
 def run_vllm():
@@ -206,7 +210,7 @@ def run_vllm():
         "--model", "Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4",
         "--port", "8001",
         "--max-model-len", "4096",
-        "--gpu-memory-utilization", "0.85"
+        "--gpu-memory-utilization", "0.5"
     ])
 
 thread = threading.Thread(target=run_vllm, daemon=True)
@@ -221,13 +225,96 @@ print(f"vLLM URL (copy this): {vllm_url}")
 # → Paste URL này vào file .env trên local
 ```
 
-**Option B: Dùng cloudflared**
+**Option B: Multi-GPU (nâng cao - dùng 2 GPUs)**
+
+```python
+# Cell 1 — Cài dependencies
+!pip install -q vllm fastapi uvicorn pyngrok mlflow sentence-transformers
+
+# Nếu cài vLLM bị lỗi, dùng fallback:
+# !pip install transformers==4.46.3 --quiet
+# !pip install vllm==0.7.3 --quiet
+
+# Cell 2 — Setup ngrok token (lấy tại ngrok.com/your-authtoken)
+from pyngrok import ngrok
+ngrok.set_auth_token("YOUR_NGROK_TOKEN")  # thay token của bạn
+
+# Cell 3 — Khởi động vLLM server (multi-GPU)
+import subprocess
+import os
+import time
+import requests
+import threading
+
+MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4"
+
+def start_server(gpu_id, port):
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+
+    proc = subprocess.Popen(
+        [
+            "vllm", "serve", MODEL_NAME,
+            "--dtype", "float16",
+            "--max-model-len", "8192",
+            "--host", "0.0.0.0",
+            "--port", str(port),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=env
+    )
+
+    def stream_logs():
+        for line in proc.stdout:
+            print(f"[GPU {gpu_id}] {line.decode()}", end="")
+
+    threading.Thread(target=stream_logs, daemon=True).start()
+
+    return proc
+
+print("Starting Server on GPU 0 (Port 8000)")
+proc1 = start_server(0, 8000)
+
+print("Starting Server on GPU 1 (Port 8001)")
+proc2 = start_server(1, 8001)
+
+def wait_for_server(port):
+    print(f" Waiting for server on port {port}...")
+    for _ in range(60):
+        try:
+            r = requests.get(f"http://localhost:{port}/health")
+            if r.status_code == 200:
+                print(f"Server on port {port} is ready!")
+                return
+        except:
+            time.sleep(5)
+    raise RuntimeError(f"Server on port {port} failed to start.")
+
+wait_for_server(8000)
+wait_for_server(8001)
+
+# Cell 4 — Tạo ngrok tunnel
+print("Creating ngrok tunnels...")
+tunnel1 = ngrok.connect(8000, "http")
+tunnel2 = ngrok.connect(8001, "http")
+
+print(f"GPU 0 URL (copy this): {tunnel1.public_url}")
+print(f"GPU 1 URL (copy this): {tunnel2.public_url}")
+# → Paste URLs này vào file .env trên local (có thể dùng 1 trong 2 hoặc cả 2 cho load balancing)
+```
+
+**Option C: Dùng cloudflared (Single GPU)**
 
 ```python
 # Cell 1 — Cài dependencies
 !pip install -q vllm fastapi uvicorn cloudflared mlflow sentence-transformers
 
-# Cell 2 — Khởi động vLLM server
+# Nếu cài vLLM bị lỗi, dùng fallback:
+# !pip install transformers==4.46.3 --quiet
+# !pip install vllm==0.7.3 --quiet
+
+# Cell 2 — Khởi động vLLM server (single GPU)
 import subprocess, threading, time
 
 def run_vllm():
@@ -236,7 +323,7 @@ def run_vllm():
         "--model", "Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4",
         "--port", "8001",
         "--max-model-len", "4096",
-        "--gpu-memory-utilization", "0.85"
+        "--gpu-memory-utilization", "0.5"
     ])
 
 thread = threading.Thread(target=run_vllm, daemon=True)
@@ -250,6 +337,83 @@ tunnel = subprocess.run(["cloudflared", "tunnel", "--url", "http://localhost:800
 print(f"vLLM URL (copy from output):")
 print(tunnel.stdout)
 # → Paste URL này vào file .env trên local
+```
+
+**Option D: Dùng cloudflared (Multi-GPU)**
+
+```python
+# Cell 1 — Cài dependencies
+!pip install -q vllm fastapi uvicorn cloudflared mlflow sentence-transformers
+
+# Nếu cài vLLM bị lỗi, dùng fallback:
+# !pip install transformers==4.46.3 --quiet
+# !pip install vllm==0.7.3 --quiet
+
+# Cell 2 — Khởi động vLLM server (multi-GPU)
+import subprocess
+import os
+import time
+import requests
+import threading
+
+MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4"
+
+def start_server(gpu_id, port):
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+
+    proc = subprocess.Popen(
+        [
+            "vllm", "serve", MODEL_NAME,
+            "--dtype", "float16",
+            "--max-model-len", "8192",
+            "--host", "0.0.0.0",
+            "--port", str(port),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=env
+    )
+
+    def stream_logs():
+        for line in proc.stdout:
+            print(f"[GPU {gpu_id}] {line.decode()}", end="")
+
+    threading.Thread(target=stream_logs, daemon=True).start()
+
+    return proc
+
+print("Starting Server on GPU 0 (Port 8000)")
+proc1 = start_server(0, 8000)
+
+print("Starting Server on GPU 1 (Port 8001)")
+proc2 = start_server(1, 8001)
+
+def wait_for_server(port):
+    print(f" Waiting for server on port {port}...")
+    for _ in range(60):
+        try:
+            r = requests.get(f"http://localhost:{port}/health")
+            if r.status_code == 200:
+                print(f"Server on port {port} is ready!")
+                return
+        except:
+            time.sleep(5)
+    raise RuntimeError(f"Server on port {port} failed to start.")
+
+wait_for_server(8000)
+wait_for_server(8001)
+
+# Cell 3 — Tạo cloudflare tunnel
+import subprocess
+print("Creating cloudflare tunnels...")
+tunnel1 = subprocess.run(["cloudflared", "tunnel", "--url", "http://localhost:8000"], capture_output=True, text=True)
+tunnel2 = subprocess.run(["cloudflared", "tunnel", "--url", "http://localhost:8001"], capture_output=True, text=True)
+print(f"GPU 0 URL (copy from output):")
+print(tunnel1.stdout)
+print(f"GPU 1 URL (copy from output):")
+print(tunnel2.stdout)
+# → Paste URLs này vào file .env trên local (có thể dùng 1 trong 2 hoặc cả 2 cho load balancing)
 ```
 
 ### Bước 2.2 — Embedding service trên Kaggle
