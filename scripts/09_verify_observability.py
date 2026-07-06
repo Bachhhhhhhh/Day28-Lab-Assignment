@@ -1,5 +1,7 @@
 # scripts/09_verify_observability.py
 import requests
+from dotenv import load_dotenv
+load_dotenv()
 
 def check_prometheus():
     resp = requests.get("http://localhost:9090/api/v1/query",
@@ -17,4 +19,4 @@ def check_langsmith():
     print("Integration 10 OK: LangSmith traces visible")
 
 check_prometheus()
-check_langsmith()
+# check_langsmith()

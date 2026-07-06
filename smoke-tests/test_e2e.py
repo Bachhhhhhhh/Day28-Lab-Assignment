@@ -1,5 +1,7 @@
 # smoke-tests/test_e2e.py
 import pytest, requests, time, os
+from dotenv import load_dotenv
+load_dotenv()
 
 BASE_URL = "http://localhost:8000"
 VLLM_URL = os.environ.get("VLLM_NGROK_URL", "")
